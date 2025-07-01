@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Defect Detection</title>
+</head>
+<body>
+    <h1>Autoencoder Defect Detection</h1>
+    <input type="file" id="imageInput" accept="image/*">
+    <button id="detectBtn">Detect Defects</button>
+    <div id="result"></div>
+    
+    <script>
+        document.getElementById('detectBtn').addEventListener('click', async () => {
+            const fileInput = document.getElementById('imageInput');
+            if (!fileInput.files.length) return;
+            
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/api/detect_defects/', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                document.getElementById('result').innerHTML = `
+                    <h3>Status: ${result.status}</h3>
+                    <p>Defect count: ${result.defect_count}</p>
+                    ${result.result_path ? `<img src="${result.result_path}" style="max-width: 500px;">` : ''}
+                `;
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        });
+    </script>
+</body>
+</html>
