@@ -4,17 +4,16 @@ import torch
 import numpy as np
 from pathlib import Path
 import cv2
-import uuid
-from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+import uuid
+from datetime import datetime
 
-# Initialize FastAPI app
 app = FastAPI(
     title="Autoencoder Defect Detection API",
-    description="API for detecting defects using autoencoder model",
-    version="1.0.0"
+    version="1.0.0",
+    description="Complete defect detection API with all original features"
 )
 
 # CORS Configuration
@@ -25,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Setup directories (Vercel-compatible)
+# Vercel-compatible directories (using /tmp)
 BASE_DIR = Path("/tmp/defect_detection")
 UPLOAD_DIR = BASE_DIR / "uploads"
 RESULT_DIR = BASE_DIR / "results"
@@ -35,7 +34,6 @@ for directory in [UPLOAD_DIR, RESULT_DIR, MODEL_DIR]:
     directory.mkdir(exist_ok=True, parents=True)
 
 class Autoencoder(torch.nn.Module):
-    """Autoencoder model for defect detection"""
     def __init__(self):
         super().__init__()
         # Encoder
@@ -65,126 +63,120 @@ class Autoencoder(torch.nn.Module):
     def forward(self, x):
         return self.decoder(self.encoder(x))
 
-# Global application state
+# Application state
 app.state.model_loaded = False
 app.state.autoencoder = None
 app.state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def process_image(image: np.ndarray, threshold: float = 0.4) -> tuple:
-    """Process image through autoencoder and detect defects"""
-    try:
-        # Preprocess
-        h, w = image.shape[:2]
-        resized = cv2.resize(image, (256, 256))
-        tensor = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).float() / 255.0
-        tensor = tensor.to(app.state.device)
-
-        # Inference
-        with torch.no_grad():
-            recon = app.state.autoencoder(tensor)
-            diff = torch.abs(tensor - recon).mean(1).squeeze().cpu().numpy()
-            heatmap = cv2.resize(diff, (w, h))
-
-        # Thresholding
-        _, mask = cv2.threshold((heatmap * 255).astype(np.uint8), int(threshold * 255), 255, cv2.THRESH_BINARY)
-
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        defects = []
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area > 100:  # Minimum defect area
-                x, y, w, h = cv2.boundingRect(cnt)
-                defects.append({
-                    "x": x, "y": y, "width": w, "height": h,
-                    "area": float(area)
-                })
-
-        return defects, heatmap
-
-    except Exception as e:
-        raise RuntimeError(f"Image processing failed: {str(e)}")
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize application state"""
-    app.state.model_loaded = False
-    app.state.autoencoder = None
-    app.state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-@app.post("/api/models")
+@app.post("/api/load_model")
 async def load_model(
     model_file: UploadFile = File(...),
-    force_cpu: bool = Form(False)
+    force_cpu: bool = Form(False),
+    debug_mode: bool = Form(False)
 ):
-    """Endpoint to load the autoencoder model"""
+    """Load the autoencoder model"""
     try:
-        # Set device
+        # Set device configuration
         if force_cpu:
             app.state.device = torch.device("cpu")
-        
+        else:
+            app.state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         # Save model file
         model_path = MODEL_DIR / f"model_{uuid.uuid4().hex}.pth"
         with open(model_path, "wb") as buffer:
             buffer.write(await model_file.read())
 
-        # Load model
+        # Load and initialize model
         app.state.autoencoder = Autoencoder().to(app.state.device)
         app.state.autoencoder.load_state_dict(torch.load(model_path, map_location=app.state.device))
         app.state.autoencoder.eval()
         app.state.model_loaded = True
 
+        # Cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return JSONResponse({
             "status": "success",
-            "message": "Model loaded successfully",
-            "device": str(app.state.device),
-            "model_size": f"{os.path.getsize(model_path)/1024/1024:.2f}MB"
+            "message": f"Model loaded on {app.state.device}",
+            "model_size": f"{os.path.getsize(model_path)/1024/1024:.2f}MB",
+            "debug_mode": debug_mode
         })
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Model loading failed: {str(e)}"
+            detail={
+                "error": str(e),
+                "message": "Model loading failed",
+                "device": str(app.state.device)
+            }
         )
 
-@app.post("/api/detections")
+@app.post("/api/detect")
 async def detect_defects(
     image: UploadFile = File(...),
-    threshold: float = Form(0.4, ge=0.1, le=0.9),
+    heatmap_threshold: float = Form(0.4, ge=0.1, le=0.9),
+    min_defect_area: int = Form(100),
     visualize: bool = Form(True)
 ):
-    """Endpoint to detect defects in an image"""
+    """Detect defects in an image"""
     if not app.state.model_loaded:
-        raise HTTPException(status_code=400, detail="Model not loaded. Please load model first.")
+        raise HTTPException(400, detail="Model not loaded. Please load model first.")
 
     try:
         # Read and validate image
         contents = await image.read()
         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
-            raise HTTPException(status_code=400, detail="Invalid image file")
+            raise HTTPException(400, detail="Invalid image file")
 
         # Process image
-        defects, heatmap = process_image(img, threshold)
+        h, w = img.shape[:2]
+        resized = cv2.resize(img, (256, 256))
+        tensor = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).float() / 255.0
+        tensor = tensor.to(app.state.device)
 
-        # Generate result
-        result_id = uuid.uuid4().hex
+        # Model inference
+        with torch.no_grad():
+            recon = app.state.autoencoder(tensor)
+            diff = torch.abs(tensor - recon).mean(1).squeeze().cpu().numpy()
+            heatmap = cv2.resize(diff, (w, h))
+
+        # Thresholding and contour detection
+        _, mask = cv2.threshold((heatmap * 255).astype(np.uint8), int(heatmap_threshold * 255), 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Process defects
+        defects = []
+        result_img = img.copy() if visualize else None
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area >= min_defect_area:
+                x, y, w, h = cv2.boundingRect(cnt)
+                defects.append({
+                    "x": x, "y": y, "width": w, "height": h,
+                    "area": float(area),
+                    "confidence": float(np.max(heatmap[y:y+h, x:x+w]))
+                })
+                if visualize:
+                    cv2.rectangle(result_img, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                    cv2.putText(result_img, f"{area:.0f}px", (x, y-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+
+        # Prepare response
         response = {
             "status": "success",
             "defect_count": len(defects),
             "defects": defects,
-            "heatmap_size": f"{heatmap.nbytes/1024:.2f}KB"
+            "heatmap_size": f"{heatmap.nbytes/1024:.2f}KB",
+            "image_size": f"{len(contents)/1024:.2f}KB"
         }
 
-        # If visualization requested
+        # Save visualization if requested
         if visualize and defects:
-            result_img = img.copy()
-            for defect in defects:
-                cv2.rectangle(result_img,
-                            (defect["x"], defect["y"]),
-                            (defect["x"] + defect["width"], defect["y"] + defect["height"]),
-                            (0, 0, 255), 2)
-            
+            result_id = uuid.uuid4().hex
             result_path = RESULT_DIR / f"result_{result_id}.jpg"
             cv2.imwrite(str(result_path), result_img)
             response["result_url"] = f"/api/results/{result_id}"
@@ -194,33 +186,57 @@ async def detect_defects(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Detection failed: {str(e)}"
+            detail={
+                "error": str(e),
+                "message": "Detection failed",
+                "input_size": f"{len(contents)/1024:.2f}KB" if 'contents' in locals() else None
+            }
         )
 
 @app.get("/api/results/{result_id}")
 async def get_result(result_id: str):
-    """Endpoint to retrieve detection results"""
+    """Retrieve saved detection results"""
     result_path = RESULT_DIR / f"result_{result_id}.jpg"
     if not result_path.exists():
-        raise HTTPException(status_code=404, detail="Result not found")
+        raise HTTPException(404, detail="Result not found or expired")
     return FileResponse(result_path)
+
+@app.get("/api/system_info")
+async def system_info():
+    """Get system information"""
+    return {
+        "system": {
+            "python": sys.version,
+            "torch": torch.__version__,
+            "cuda": torch.cuda.is_available(),
+            "device": str(app.state.device)
+        },
+        "model": {
+            "loaded": app.state.model_loaded,
+            "type": "Autoencoder"
+        }
+    }
 
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
     return {
-        "status": "ok",
-        "model_loaded": app.state.model_loaded,
-        "device": str(app.state.device),
+        "status": "operational",
+        "model_ready": app.state.model_loaded,
         "timestamp": datetime.now().isoformat()
     }
 
 @app.get("/api")
 async def root():
-    """Root endpoint"""
+    """API root endpoint"""
     return {
         "message": "Autoencoder Defect Detection API",
         "version": app.version,
-        "docs": "/docs",
-        "redoc": "/redoc"
+        "endpoints": {
+            "load_model": "POST /api/load_model",
+            "detect": "POST /api/detect",
+            "results": "GET /api/results/{id}",
+            "health": "GET /api/health",
+            "docs": "/api/docs"
+        }
     }

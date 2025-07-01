@@ -2,21 +2,22 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/*.py",
+      "src": "api/main.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api/_vercel.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "api/main.py"
+      "dest": "api/_vercel.py"
     },
     {
       "src": "/(.*)",
-      "dest": "public/$1",
-      "headers": {
-        "Cache-Control": "s-maxage=86400"
-      }
+      "dest": "public/$1"
     }
   ]
 }
