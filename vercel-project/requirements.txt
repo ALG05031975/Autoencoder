@@ -1,7 +1,22 @@
-fastapi==0.95.2
-uvicorn==0.22.0
-torch==2.0.1
-numpy==1.24.3
-opencv-python-headless==4.7.0.72
-python-multipart==0.0.6
+# Core Requirements
+fastapi==0.109.2
+uvicorn==0.27.0
+python-multipart==0.0.9
 mangum==0.17.0
+
+# Machine Learning
+torch==2.2.1
+torchvision==0.17.1
+
+# Image Processing
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+Pillow==10.2.0
+
+# Utilities
+python-dotenv==1.0.1
+python-dateutil==2.9.0.post0
+orjson==3.9.15
+
+# Vercel-Specific
+awslambdaric==2.0.4
