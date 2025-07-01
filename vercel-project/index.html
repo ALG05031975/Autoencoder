@@ -2,37 +2,88 @@
 <html>
 <head>
     <title>Defect Detection</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { margin-bottom: 20px; }
+        button { padding: 8px 16px; margin-left: 10px; }
+        #result { margin-top: 20px; border: 1px solid #ddd; padding: 15px; }
+    </style>
 </head>
 <body>
     <h1>Autoencoder Defect Detection</h1>
-    <input type="file" id="imageInput" accept="image/*">
-    <button id="detectBtn">Detect Defects</button>
-    <div id="result"></div>
     
+    <div class="container">
+        <h3>1. Load Model</h3>
+        <input type="file" id="modelFile" accept=".pth">
+        <button onclick="loadModel()">Load Model</button>
+        <p id="modelStatus"></p>
+    </div>
+    
+    <div class="container">
+        <h3>2. Detect Defects</h3>
+        <input type="file" id="imageFile" accept="image/*">
+        <button onclick="detectDefects()">Detect Defects</button>
+        <div id="result"></div>
+    </div>
+
     <script>
-        document.getElementById('detectBtn').addEventListener('click', async () => {
-            const fileInput = document.getElementById('imageInput');
-            if (!fileInput.files.length) return;
+        async function loadModel() {
+            const fileInput = document.getElementById('modelFile');
+            if (!fileInput.files.length) {
+                alert("Please select a model file");
+                return;
+            }
             
-            const formData = new FormData();
-            formData.append('image', fileInput.files[0]);
+            const statusElement = document.getElementById('modelStatus');
+            statusElement.textContent = "Loading model...";
             
             try {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                
+                const response = await fetch('/api/load_model/', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                statusElement.textContent = result.message;
+                statusElement.style.color = "green";
+            } catch (error) {
+                statusElement.textContent = "Error: " + error;
+                statusElement.style.color = "red";
+            }
+        }
+
+        async function detectDefects() {
+            const fileInput = document.getElementById('imageFile');
+            if (!fileInput.files.length) {
+                alert("Please select an image file");
+                return;
+            }
+            
+            const resultElement = document.getElementById('result');
+            resultElement.innerHTML = "Processing...";
+            
+            try {
+                const formData = new FormData();
+                formData.append('image', fileInput.files[0]);
+                
                 const response = await fetch('/api/detect_defects/', {
                     method: 'POST',
                     body: formData
                 });
                 
                 const result = await response.json();
-                document.getElementById('result').innerHTML = `
-                    <h3>Status: ${result.status}</h3>
-                    <p>Defect count: ${result.defect_count}</p>
-                    ${result.result_path ? `<img src="${result.result_path}" style="max-width: 500px;">` : ''}
+                resultElement.innerHTML = `
+                    <h4>Results</h4>
+                    <p>Status: ${result.status}</p>
+                    <p>Defects found: ${result.defects.length}</p>
                 `;
             } catch (error) {
-                console.error('Error:', error);
+                resultElement.innerHTML = `<p style="color:red">Error: ${error}</p>`;
             }
-        });
+        }
     </script>
 </body>
 </html>
